@@ -22,7 +22,6 @@ type NextTrackMsg struct{}
 type pomodoroTickMsg struct{}
 
 func startLoop() {
-	// animation ticker — 33ms
 	go func() {
 		t := time.NewTicker(33 * time.Millisecond)
 		defer t.Stop()
@@ -33,7 +32,6 @@ func startLoop() {
 		}
 	}()
 
-	// pomodoro ticker — 1 second
 	go func() {
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
@@ -77,16 +75,17 @@ type Model struct {
 	leftSpin     float64
 	rightSpin    float64
 	playing      bool
+	loopTrack    bool
 	creator      Creator
 	pomo         pomodoro.Pomodoro
 }
 
 func NewModel(player *audio.Player, tapes []*tape.Tape) Model {
 	return Model{
-		screen:  screenLibrary,
-		player:  player,
-		tapes:   tapes,
-		pomo:    pomodoro.New(),
+		screen: screenLibrary,
+		player: player,
+		tapes:  tapes,
+		pomo:   pomodoro.New(),
 	}
 }
 
@@ -103,7 +102,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 	case NextTrackMsg:
-		if m.currentTape != nil && m.currentTrack < len(m.currentTape.Tracks)-1 {
+		if m.loopTrack && m.currentTape != nil {
+			m.player.Load(m.currentTape.TrackPath(m.currentTape.Tracks[m.currentTrack]))
+			m.playing = true
+		} else if m.currentTape != nil && m.currentTrack < len(m.currentTape.Tracks)-1 {
 			m.currentTrack++
 			if err := m.player.Load(m.currentTape.TrackPath(m.currentTape.Tracks[m.currentTrack])); err == nil {
 				m.playing = true
@@ -254,6 +256,8 @@ func (m Model) updatePlayer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.player.Load(m.currentTape.TrackPath(m.currentTape.Tracks[m.currentTrack]))
 			m.playing = true
 		}
+	case "l":
+		m.loopTrack = !m.loopTrack
 	case "t":
 		m.pomo.Toggle()
 	case "+", "=":
@@ -494,28 +498,21 @@ func centerInBox(text string) string {
 	return strings.Repeat(" ", left) + text + strings.Repeat(" ", right)
 }
 
-// topRow builds the tape name + optional pomodoro timer row.
-// Both are pure ASCII so len() is safe for width math.
-func buildTopRow(tapeName string, pomo pomodoro.Pomodoro) (plain string, colored string) {
+func buildTopRow(tapeName string, pomo pomodoro.Pomodoro) string {
 	dim        := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	focusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("136")).Bold(true)
 	breakStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("77")).Bold(true)
 
 	if !pomo.Active {
-		plain   = centerInBox(tapeName)
-		colored = dim.Render(plain)
-		return
+		return dim.Render(centerInBox(tapeName))
 	}
 
 	timerStr := pomo.FormatTime() + " " + pomo.PhaseName()
-	// layout: " tapeName<gap>timerStr "
-	// 1 + len(tapeName) + gap + len(timerStr) + 1 = boxInner
 	gap := boxInner - 1 - len(tapeName) - len(timerStr) - 1
 	if gap < 1 {
 		gap = 1
 	}
-	plain = " " + tapeName + strings.Repeat(" ", gap) + timerStr + " "
-	// pad to exactly boxInner
+	plain := " " + tapeName + strings.Repeat(" ", gap) + timerStr + " "
 	for len(plain) < boxInner {
 		plain += " "
 	}
@@ -525,11 +522,9 @@ func buildTopRow(tapeName string, pomo pomodoro.Pomodoro) (plain string, colored
 
 	nameColored := dim.Render(" " + tapeName + strings.Repeat(" ", gap))
 	if pomo.IsBreak() {
-		colored = nameColored + breakStyle.Render(timerStr+" ")
-	} else {
-		colored = nameColored + focusStyle.Render(timerStr+" ")
+		return nameColored + breakStyle.Render(timerStr+" ")
 	}
-	return
+	return nameColored + focusStyle.Render(timerStr+" ")
 }
 
 func renderWalkman(m Model) string {
@@ -557,11 +552,17 @@ func renderWalkman(m Model) string {
 		}
 	}
 
-	_, topRowColored := buildTopRow(tapeName, m.pomo)
+	topRowColored := buildTopRow(tapeName, m.pomo)
 
 	statusColored := accent.Render(">") + dim.Render(" playing")
 	if !m.playing {
 		statusColored = dim.Render("= stopped")
+	}
+
+	// loop indicator — 2 chars, safe ASCII width
+	loopIndicator := "  "
+	if m.loopTrack {
+		loopIndicator = dim.Render(" o") // "o" for loop, safe single width
 	}
 
 	var ctrlColored string
@@ -577,8 +578,9 @@ func renderWalkman(m Model) string {
 			shell.Render(">|")
 	}
 
-	const ctrlGap = boxInner - 2 - 9 - 16
-	ctrlRowColored := "  " + statusColored + strings.Repeat(" ", ctrlGap) + ctrlColored
+	// ctrl row: "  status(9) + gap(15) + loopIndicator(2) + ctrl(16)" = 44
+	const ctrlGap = boxInner - 2 - 9 - 2 - 16 // = 15
+	ctrlRowColored := "  " + statusColored + strings.Repeat(" ", ctrlGap) + loopIndicator + ctrlColored
 
 	const reelPad = 4
 	const reelGap = boxInner - 2*reelW - 2*reelPad
@@ -608,7 +610,7 @@ func renderWalkman(m Model) string {
 	ln(boxRow("", shell, none))
 	ln(shell.Render("+" + strings.Repeat("=", boxInner) + "+"))
 
-	b.WriteString("\n  " + hint.Render("space . play/pause    n/p . tracks    t . pomodoro    esc . library    q . quit") + "\n")
+	b.WriteString("\n  " + hint.Render("space . play/pause    n/p . tracks    l . loop    t . pomodoro    esc . library    q . quit") + "\n")
 
 	return b.String()
 }
