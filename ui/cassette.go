@@ -34,15 +34,14 @@ type screen int
 
 const (
 	screenLibrary screen = iota
+	screenDetail
 	screenPlayer
 )
 
 const (
-	reelW   = 15
-	reelH   = 9
-	nSpokes = 5
-
-	// box inner width — fixed, never computed from colored strings
+	reelW    = 15
+	reelH    = 9
+	nSpokes  = 5
 	boxInner = 44
 )
 
@@ -53,6 +52,8 @@ type Model struct {
 	player       *audio.Player
 	tapes        []*tape.Tape
 	cursor       int
+	trackCursor  int
+	selectedTape *tape.Tape
 	currentTape  *tape.Tape
 	currentTrack int
 	frame        int
@@ -87,6 +88,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.screen {
 		case screenLibrary:
 			return m.updateLibrary(msg)
+		case screenDetail:
+			return m.updateDetail(msg)
 		case screenPlayer:
 			return m.updatePlayer(msg)
 		}
@@ -107,18 +110,39 @@ func (m Model) updateLibrary(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor++
 		}
 	case "enter", " ":
-		if len(m.tapes) == 0 {
+		if len(m.tapes) > 0 {
+			m.selectedTape = m.tapes[m.cursor]
+			m.trackCursor = 0
+			m.screen = screenDetail
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc", "b":
+		m.screen = screenLibrary
+	case "enter", " ":
+		if m.selectedTape == nil || len(m.selectedTape.Tracks) == 0 {
 			break
 		}
-		t := m.tapes[m.cursor]
-		m.currentTape = t
+		m.currentTape = m.selectedTape
 		m.currentTrack = 0
 		m.playing = false
 		m.screen = screenPlayer
-		if len(t.Tracks) > 0 {
-			if err := m.player.Load(t.TrackPath(t.Tracks[0])); err == nil {
-				m.playing = true
-			}
+		if err := m.player.Load(m.currentTape.TrackPath(m.currentTape.Tracks[0])); err == nil {
+			m.playing = true
+		}
+	case "up", "k":
+		if m.trackCursor > 0 {
+			m.trackCursor--
+		}
+	case "down", "j":
+		if m.selectedTape != nil && m.trackCursor < len(m.selectedTape.Tracks)-1 {
+			m.trackCursor++
 		}
 	}
 	return m, nil
@@ -157,6 +181,10 @@ func (m Model) View() string {
 		return lipgloss.Place(m.width, m.height,
 			lipgloss.Center, lipgloss.Center,
 			m.viewLibrary())
+	case screenDetail:
+		return lipgloss.Place(m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			m.viewDetail())
 	case screenPlayer:
 		return lipgloss.Place(m.width, m.height,
 			lipgloss.Center, lipgloss.Center,
@@ -200,11 +228,57 @@ func (m Model) viewLibrary() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(hint.Render("  ↑↓ · navigate    enter · load tape    q · quit"))
+	b.WriteString(hint.Render("  ↑↓ . navigate    enter . inspect tape    q . quit"))
 	return b.String()
 }
 
-// ── reel ──────────────────────────────────────────────────────────────────────
+func (m Model) viewDetail() string {
+	if m.selectedTape == nil {
+		return ""
+	}
+	t := m.selectedTape
+
+	title    := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true)
+	dim      := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	selected := lipgloss.NewStyle().Foreground(lipgloss.Color("77")).Bold(true)
+	artist   := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	num      := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	hint     := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	amber    := lipgloss.NewStyle().Foreground(lipgloss.Color("136"))
+
+	var b strings.Builder
+
+	b.WriteString(amber.Render("  ▌ ") + title.Render(t.Name) + "\n")
+	if t.Artist != "" {
+		b.WriteString(dim.Render("    "+t.Artist) + "\n")
+	}
+	b.WriteString(dim.Render(fmt.Sprintf("    %d tracks", len(t.Tracks))) + "\n")
+	b.WriteString("\n")
+	b.WriteString(dim.Render("  ────────────────────────────────") + "\n\n")
+
+	for i, tr := range t.Tracks {
+		numStr := fmt.Sprintf("%02d", i+1)
+		if i == m.trackCursor {
+			b.WriteString(fmt.Sprintf("  %s  %s  %s\n",
+				num.Render(numStr),
+				selected.Render(tr.Title),
+				artist.Render(tr.Artist),
+			))
+		} else {
+			b.WriteString(fmt.Sprintf("  %s  %s  %s\n",
+				num.Render(numStr),
+				dim.Render(tr.Title),
+				artist.Render(tr.Artist),
+			))
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(dim.Render("  ────────────────────────────────") + "\n\n")
+	b.WriteString(hint.Render("  enter . play    esc . back    q . quit"))
+
+	return b.String()
+}
 
 func dirChar(angle float64) string {
 	deg := math.Mod(angle*180/math.Pi+360, 360)
@@ -273,9 +347,9 @@ func makeReel(spin float64) []string {
 }
 
 func colorizeReel(rows []string) []string {
-	metal  := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	hub    := lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
-	fill   := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	metal := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	hub   := lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
+	fill  := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
 	out := make([]string, len(rows))
 	for i, r := range rows {
@@ -298,13 +372,7 @@ func colorizeReel(rows []string) []string {
 	return out
 }
 
-// ── walkman ───────────────────────────────────────────────────────────────────
-
-// boxRow builds one line of the walkman box.
-// content must be exactly boxInner visible chars — no color codes.
-// Color is applied AFTER width is fixed, so escape codes never affect layout.
 func boxRow(content string, shellStyle, contentStyle lipgloss.Style) string {
-	// pad or trim content to exactly boxInner chars
 	vis := lipgloss.Width(content)
 	if vis < boxInner {
 		content = content + strings.Repeat(" ", boxInner-vis)
@@ -314,7 +382,6 @@ func boxRow(content string, shellStyle, contentStyle lipgloss.Style) string {
 	return shellStyle.Render("|") + contentStyle.Render(content) + shellStyle.Render("|")
 }
 
-// centerInBox returns a string of exactly boxInner chars with text centered.
 func centerInBox(text string) string {
 	n := len(text)
 	if n >= boxInner {
@@ -350,16 +417,11 @@ func renderWalkman(m Model) string {
 		}
 	}
 
-	// ALL strings used in width math must be pure ASCII
-	// ▶ ■ · are ambiguous-width Unicode — terminals may render them as 2 cells
-	// status: exactly 9 ASCII chars
 	statusColored := accent.Render(">") + dim.Render(" playing")
 	if !m.playing {
 		statusColored = dim.Render("= stopped")
 	}
 
-	// ctrl: exactly 16 ASCII chars "|<  [ ]  [>]  >|"
-	//ctrlPlain := "|<  [ ]  [>]  >|"
 	var ctrlColored string
 	if m.playing {
 		ctrlColored = shell.Render("|<") + "  " +
@@ -373,13 +435,11 @@ func renderWalkman(m Model) string {
 			shell.Render(">|")
 	}
 
-	// ctrl row = "  " + status(9) + gap + ctrl(16) = 44
-	// gap = 44 - 2 - 9 - 16 = 17
-	const ctrlGap = boxInner - 2 - 9 - 16 // = 17
+	const ctrlGap = boxInner - 2 - 9 - 16
 	ctrlRowColored := "  " + statusColored + strings.Repeat(" ", ctrlGap) + ctrlColored
 
 	const reelPad = 4
-	const reelGap = boxInner - 2*reelW - 2*reelPad // = 6
+	const reelGap = boxInner - 2*reelW - 2*reelPad
 
 	var b strings.Builder
 	ln := func(s string) { b.WriteString(s + "\n") }
