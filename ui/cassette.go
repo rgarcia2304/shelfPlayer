@@ -4,7 +4,7 @@ import (
 	"math"
 	"strings"
 	"time"
-
+        "github.com/rgarcia2304/shelfPlayer/audio"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -48,10 +48,11 @@ type Model struct {
 	playing bool
 	width   int
 	height  int
+	player *audio.Player
 }
 
-func NewModel() Model {
-	return Model{playing: true}
+func NewModel(player *audio.Player) Model {
+	return Model{playing: true, player: player}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -82,6 +83,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case " ":
+			if m.player != nil{
+				m.player.Toggle()
+			}
 			m.playing = !m.playing
 		}
 	}

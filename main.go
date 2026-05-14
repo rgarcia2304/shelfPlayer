@@ -5,13 +5,23 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/rgarcia2304/shelfPlayer/audio"
 	"github.com/rgarcia2304/shelfPlayer/ui"
 )
 
 func main() {
-	m := ui.NewModel()
+	player := audio.NewPlayer()
+	defer player.Close()
+
+	// pass player into the model
+	m := ui.NewModel(player)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	ui.SetProgram(p)
+	
+	if err := player.Load("test.mp3"); err != nil {
+    		fmt.Fprintf(os.Stderr, "failed to load audio: %v\n", err)
+    		os.Exit(1)
+	}
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
