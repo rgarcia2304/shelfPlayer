@@ -1,0 +1,12 @@
+{
+  "name": "Kind of Blue",
+  "artist": "Miles Davis",
+  "color": "33",
+  "tracks": [
+    {
+      "title": "So What",
+      "artist": "Miles Davis",
+      "file": "01-so-what.mp3"
+    }
+  ]
+}
