@@ -23,6 +23,19 @@ func NewPlayer() *Player {
 	return &Player{}
 }
 
+
+func (p *Player) Done() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ctrl == nil {
+		return false
+	}
+	speaker.Lock()
+	done := p.ctrl.Streamer == nil
+	speaker.Unlock()
+	return done
+}
+
 func (p *Player) Load(path string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

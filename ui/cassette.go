@@ -17,6 +17,7 @@ var program *tea.Program
 func SetProgram(p *tea.Program) { program = p }
 
 type frameMsg struct{}
+type nextTrackMsg struct{}
 
 func startLoop() {
 	go func() {
@@ -77,13 +78,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+	case nextTrackMsg:
+		if m.currentTape != nil && m.currentTrack < len(m.currentTape.Tracks)-1 {
+			m.currentTrack++
+			if err := m.player.Load(m.currentTape.TrackPath(m.currentTape.Tracks[m.currentTrack])); err == nil {
+				m.playing = true
+			}
+		} else {
+			m.playing = false
+		}
+
 	case frameMsg:
 		if m.playing {
 			m.tape += 0.03
 			m.leftSpin += 0.03
 			m.rightSpin += 0.03
 			m.frame++
+			if m.player.Done() {
+				return m, func() tea.Msg { return nextTrackMsg{} }
+			}
 		}
+
 	case tea.KeyMsg:
 		switch m.screen {
 		case screenLibrary:

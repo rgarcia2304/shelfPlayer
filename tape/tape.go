@@ -2,9 +2,9 @@ package tape
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"sort"
+	"os"
 	"strings"
 )
 
@@ -26,17 +26,12 @@ func (t *Tape) TrackPath(track Track) string {
 	return filepath.Join(t.Dir, track.File)
 }
 
-// RootDir returns ~/shelfPlayer/tapes
 func RootDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	root := filepath.Join(home, "shelfPlayer", "tapes")
-	if err := os.MkdirAll(root, 0755); err != nil {
-		return "", err
-	}
-	return root, nil
+    root := "tapes"
+    if err := os.MkdirAll(root, 0755); err != nil {
+        return "", err
+    }
+    return root, nil
 }
 
 // LoadAll scans the tapes directory and returns all valid tapes
