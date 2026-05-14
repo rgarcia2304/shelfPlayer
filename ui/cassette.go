@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rgarcia2304/shelfPlayer/audio"
+	"github.com/rgarcia2304/shelfPlayer/pomodoro"
 	"github.com/rgarcia2304/shelfPlayer/tape"
 )
 
@@ -18,14 +19,27 @@ func SetProgram(p *tea.Program) { program = p }
 
 type frameMsg struct{}
 type NextTrackMsg struct{}
+type pomodoroTickMsg struct{}
 
 func startLoop() {
+	// animation ticker — 33ms
 	go func() {
 		t := time.NewTicker(33 * time.Millisecond)
 		defer t.Stop()
 		for range t.C {
 			if program != nil {
 				program.Send(frameMsg{})
+			}
+		}
+	}()
+
+	// pomodoro ticker — 1 second
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for range t.C {
+			if program != nil {
+				program.Send(pomodoroTickMsg{})
 			}
 		}
 	}()
@@ -64,10 +78,16 @@ type Model struct {
 	rightSpin    float64
 	playing      bool
 	creator      Creator
+	pomo         pomodoro.Pomodoro
 }
 
 func NewModel(player *audio.Player, tapes []*tape.Tape) Model {
-	return Model{screen: screenLibrary, player: player, tapes: tapes}
+	return Model{
+		screen:  screenLibrary,
+		player:  player,
+		tapes:   tapes,
+		pomo:    pomodoro.New(),
+	}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -92,11 +112,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.playing = false
 		}
 
+	case pomodoroTickMsg:
+		phaseChanged := m.pomo.Tick()
+		if phaseChanged {
+			if m.pomo.IsBreak() {
+				if m.playing {
+					m.player.Toggle()
+					m.playing = false
+				}
+			} else {
+				if !m.playing && m.currentTape != nil {
+					m.player.Toggle()
+					m.playing = true
+				}
+			}
+		}
+
 	case frameMsg:
 		if m.playing {
-			m.tape += 0.03
-			m.leftSpin += 0.03
-			m.rightSpin += 0.03
+			speed := 0.03
+			if m.pomo.Active && m.pomo.IsBreak() {
+				speed = 0.005
+			}
+			m.tape += speed
+			m.leftSpin += speed
+			m.rightSpin += speed
 			m.frame++
 		}
 
@@ -213,6 +253,22 @@ func (m Model) updatePlayer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.currentTrack--
 			m.player.Load(m.currentTape.TrackPath(m.currentTape.Tracks[m.currentTrack]))
 			m.playing = true
+		}
+	case "t":
+		m.pomo.Toggle()
+	case "+", "=":
+		if m.pomo.WorkMins < 60 {
+			m.pomo.WorkMins++
+			if !m.pomo.Active {
+				m.pomo.SecondsLeft = m.pomo.WorkMins * 60
+			}
+		}
+	case "-":
+		if m.pomo.WorkMins > 1 {
+			m.pomo.WorkMins--
+			if !m.pomo.Active {
+				m.pomo.SecondsLeft = m.pomo.WorkMins * 60
+			}
 		}
 	}
 	return m, nil
@@ -438,6 +494,44 @@ func centerInBox(text string) string {
 	return strings.Repeat(" ", left) + text + strings.Repeat(" ", right)
 }
 
+// topRow builds the tape name + optional pomodoro timer row.
+// Both are pure ASCII so len() is safe for width math.
+func buildTopRow(tapeName string, pomo pomodoro.Pomodoro) (plain string, colored string) {
+	dim        := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	focusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("136")).Bold(true)
+	breakStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("77")).Bold(true)
+
+	if !pomo.Active {
+		plain   = centerInBox(tapeName)
+		colored = dim.Render(plain)
+		return
+	}
+
+	timerStr := pomo.FormatTime() + " " + pomo.PhaseName()
+	// layout: " tapeName<gap>timerStr "
+	// 1 + len(tapeName) + gap + len(timerStr) + 1 = boxInner
+	gap := boxInner - 1 - len(tapeName) - len(timerStr) - 1
+	if gap < 1 {
+		gap = 1
+	}
+	plain = " " + tapeName + strings.Repeat(" ", gap) + timerStr + " "
+	// pad to exactly boxInner
+	for len(plain) < boxInner {
+		plain += " "
+	}
+	if len(plain) > boxInner {
+		plain = plain[:boxInner]
+	}
+
+	nameColored := dim.Render(" " + tapeName + strings.Repeat(" ", gap))
+	if pomo.IsBreak() {
+		colored = nameColored + breakStyle.Render(timerStr+" ")
+	} else {
+		colored = nameColored + focusStyle.Render(timerStr+" ")
+	}
+	return
+}
+
 func renderWalkman(m Model) string {
 	shell  := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	metal  := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
@@ -462,6 +556,8 @@ func renderWalkman(m Model) string {
 			trackNum = fmt.Sprintf("%02d / %02d", m.currentTrack+1, len(m.currentTape.Tracks))
 		}
 	}
+
+	_, topRowColored := buildTopRow(tapeName, m.pomo)
 
 	statusColored := accent.Render(">") + dim.Render(" playing")
 	if !m.playing {
@@ -491,7 +587,7 @@ func renderWalkman(m Model) string {
 	ln := func(s string) { b.WriteString(s + "\n") }
 
 	ln(shell.Render("+" + strings.Repeat("=", boxInner) + "+"))
-	ln(boxRow(centerInBox(tapeName), shell, dim))
+	ln(shell.Render("|") + topRowColored + shell.Render("|"))
 	ln(boxRow("", shell, none))
 
 	for i := 0; i < reelH; i++ {
@@ -512,7 +608,7 @@ func renderWalkman(m Model) string {
 	ln(boxRow("", shell, none))
 	ln(shell.Render("+" + strings.Repeat("=", boxInner) + "+"))
 
-	b.WriteString("\n  " + hint.Render("space . play/pause    n/p . tracks    esc . library    q . quit") + "\n")
+	b.WriteString("\n  " + hint.Render("space . play/pause    n/p . tracks    t . pomodoro    esc . library    q . quit") + "\n")
 
 	return b.String()
 }

@@ -11,36 +11,29 @@ import (
 )
 
 type Player struct {
-	mu      sync.Mutex
-	ctrl    *beep.Ctrl
-	format  beep.Format
-	file    *os.File
-	playing bool
-	ready   bool
+	mu       sync.Mutex
+	ctrl     *beep.Ctrl
+	file     *os.File
+	playing  bool
+	ready    bool
+	onFinish func()
 }
 
 func NewPlayer() *Player {
 	return &Player{}
 }
 
-
-func (p *Player) Done() bool {
+// OnFinish sets a callback that fires when a track finishes naturally
+func (p *Player) OnFinish(f func()) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.ctrl == nil {
-		return false
-	}
-	speaker.Lock()
-	done := p.ctrl.Streamer == nil
-	speaker.Unlock()
-	return done
+	p.onFinish = f
 }
 
 func (p *Player) Load(path string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// close previous
 	if p.file != nil {
 		speaker.Clear()
 		p.file.Close()
@@ -58,7 +51,6 @@ func (p *Player) Load(path string) error {
 		return err
 	}
 
-	// init speaker once — safe to call again with same sample rate
 	if !p.ready {
 		if err := speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10)); err != nil {
 			f.Close()
@@ -67,8 +59,19 @@ func (p *Player) Load(path string) error {
 		p.ready = true
 	}
 
-	p.ctrl = &beep.Ctrl{Streamer: streamer, Paused: false}
-	p.format = format
+	// capture callback before releasing lock
+	cb := p.onFinish
+
+	done := beep.Callback(func() {
+		if cb != nil {
+			cb()
+		}
+	})
+
+	p.ctrl = &beep.Ctrl{
+		Streamer: beep.Seq(streamer, done),
+		Paused:   false,
+	}
 	p.file = f
 	p.playing = true
 

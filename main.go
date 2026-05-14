@@ -24,6 +24,10 @@ func main() {
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	ui.SetProgram(p)
 
+	player.OnFinish(func() {
+		p.Send(ui.NextTrackMsg{})
+	})
+
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
