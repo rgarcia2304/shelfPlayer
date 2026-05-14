@@ -17,7 +17,7 @@ var program *tea.Program
 func SetProgram(p *tea.Program) { program = p }
 
 type frameMsg struct{}
-type nextTrackMsg struct{}
+type NextTrackMsg struct{}
 
 func startLoop() {
 	go func() {
@@ -37,6 +37,7 @@ const (
 	screenLibrary screen = iota
 	screenDetail
 	screenPlayer
+	screenCreator
 )
 
 const (
@@ -62,6 +63,7 @@ type Model struct {
 	leftSpin     float64
 	rightSpin    float64
 	playing      bool
+	creator      Creator
 }
 
 func NewModel(player *audio.Player, tapes []*tape.Tape) Model {
@@ -75,11 +77,12 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 
-	case nextTrackMsg:
+	case NextTrackMsg:
 		if m.currentTape != nil && m.currentTrack < len(m.currentTape.Tracks)-1 {
 			m.currentTrack++
 			if err := m.player.Load(m.currentTape.TrackPath(m.currentTape.Tracks[m.currentTrack])); err == nil {
@@ -95,9 +98,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.leftSpin += 0.03
 			m.rightSpin += 0.03
 			m.frame++
-			if m.player.Done() {
-				return m, func() tea.Msg { return nextTrackMsg{} }
-			}
+		}
+
+	case searchResultMsg:
+		m.creator.results = msg.results
+		if msg.err != nil {
+			m.creator.err = msg.err.Error()
+			m.creator.step = stepSearch
+		} else {
+			m.creator.step = stepResults
+			m.creator.resultCursor = 0
+		}
+
+	case downloadDoneMsg:
+		if msg.err != nil {
+			m.creator.err = msg.err.Error()
+			m.creator.step = stepResults
+		} else {
+			m.creator.tracks = append(m.creator.tracks, msg.track)
+			m.creator.step = stepSearch
+			m.creator.searchInput = ""
+			m.creator.downloading = ""
 		}
 
 	case tea.KeyMsg:
@@ -108,8 +129,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateDetail(msg)
 		case screenPlayer:
 			return m.updatePlayer(msg)
+		case screenCreator:
+			return m.updateCreator(msg)
 		}
 	}
+
 	return m, nil
 }
 
@@ -131,6 +155,9 @@ func (m Model) updateLibrary(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.trackCursor = 0
 			m.screen = screenDetail
 		}
+	case "n":
+		m.creator = NewCreator()
+		m.screen = screenCreator
 	}
 	return m, nil
 }
@@ -205,6 +232,10 @@ func (m Model) View() string {
 		return lipgloss.Place(m.width, m.height,
 			lipgloss.Center, lipgloss.Center,
 			renderWalkman(m))
+	case screenCreator:
+		return lipgloss.Place(m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			m.viewCreator())
 	}
 	return ""
 }
@@ -244,7 +275,7 @@ func (m Model) viewLibrary() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(hint.Render("  ↑↓ . navigate    enter . inspect tape    q . quit"))
+	b.WriteString(hint.Render("  ↑↓ . navigate    enter . inspect    n . new tape    q . quit"))
 	return b.String()
 }
 
@@ -292,7 +323,6 @@ func (m Model) viewDetail() string {
 	b.WriteString("\n")
 	b.WriteString(dim.Render("  ────────────────────────────────") + "\n\n")
 	b.WriteString(hint.Render("  enter . play    esc . back    q . quit"))
-
 	return b.String()
 }
 
