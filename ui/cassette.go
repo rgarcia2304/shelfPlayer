@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"time"
-        "github.com/rgarcia2304/shelfPlayer/audio"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rgarcia2304/shelfPlayer/audio"
+	"github.com/rgarcia2304/shelfPlayer/tape"
 )
 
 var program *tea.Program
@@ -19,7 +22,6 @@ func startLoop() {
 	go func() {
 		t := time.NewTicker(33 * time.Millisecond)
 		defer t.Stop()
-
 		for range t.C {
 			if program != nil {
 				program.Send(frameMsg{})
@@ -28,31 +30,40 @@ func startLoop() {
 	}()
 }
 
+type screen int
+
 const (
-	reelW = 15
-	reelH = 9
+	screenLibrary screen = iota
+	screenPlayer
+)
 
-	windowW = reelW*2 + 6
-
+const (
+	reelW   = 15
+	reelH   = 9
 	nSpokes = 5
+
+	// box inner width — fixed, never computed from colored strings
+	boxInner = 44
 )
 
 type Model struct {
-	frame int
-
-	tape float64
-
-	leftSpin  float64
-	rightSpin float64
-
-	playing bool
-	width   int
-	height  int
-	player *audio.Player
+	screen       screen
+	width        int
+	height       int
+	player       *audio.Player
+	tapes        []*tape.Tape
+	cursor       int
+	currentTape  *tape.Tape
+	currentTrack int
+	frame        int
+	tape         float64
+	leftSpin     float64
+	rightSpin    float64
+	playing      bool
 }
 
-func NewModel(player *audio.Player) Model {
-	return Model{playing: true, player: player}
+func NewModel(player *audio.Player, tapes []*tape.Tape) Model {
+	return Model{screen: screenLibrary, player: player, tapes: tapes}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -62,50 +73,141 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-
 	case frameMsg:
 		if m.playing {
-			// SIMPLE CAPSTAN MOTION (clean + readable)
 			m.tape += 0.03
-
 			m.leftSpin += 0.03
 			m.rightSpin += 0.03
-
 			m.frame++
 		}
-
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		case " ":
-			if m.player != nil{
-				m.player.Toggle()
-			}
-			m.playing = !m.playing
+		switch m.screen {
+		case screenLibrary:
+			return m.updateLibrary(msg)
+		case screenPlayer:
+			return m.updatePlayer(msg)
 		}
 	}
+	return m, nil
+}
 
+func (m Model) updateLibrary(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(m.tapes)-1 {
+			m.cursor++
+		}
+	case "enter", " ":
+		if len(m.tapes) == 0 {
+			break
+		}
+		t := m.tapes[m.cursor]
+		m.currentTape = t
+		m.currentTrack = 0
+		m.playing = false
+		m.screen = screenPlayer
+		if len(t.Tracks) > 0 {
+			if err := m.player.Load(t.TrackPath(t.Tracks[0])); err == nil {
+				m.playing = true
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m Model) updatePlayer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc", "b":
+		m.player.Toggle()
+		m.playing = false
+		m.screen = screenLibrary
+	case " ":
+		m.player.Toggle()
+		m.playing = !m.playing
+	case "n", "right":
+		if m.currentTape != nil && m.currentTrack < len(m.currentTape.Tracks)-1 {
+			m.currentTrack++
+			m.player.Load(m.currentTape.TrackPath(m.currentTape.Tracks[m.currentTrack]))
+			m.playing = true
+		}
+	case "p", "left":
+		if m.currentTape != nil && m.currentTrack > 0 {
+			m.currentTrack--
+			m.player.Load(m.currentTape.TrackPath(m.currentTape.Tracks[m.currentTrack]))
+			m.playing = true
+		}
+	}
 	return m, nil
 }
 
 func (m Model) View() string {
-	return lipgloss.Place(
-		m.width,
-		m.height,
-		lipgloss.Center,
-		lipgloss.Center,
-		renderWalkman(m),
-	)
+	switch m.screen {
+	case screenLibrary:
+		return lipgloss.Place(m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			m.viewLibrary())
+	case screenPlayer:
+		return lipgloss.Place(m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			renderWalkman(m))
+	}
+	return ""
 }
+
+func (m Model) viewLibrary() string {
+	title    := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true)
+	dim      := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	selected := lipgloss.NewStyle().Foreground(lipgloss.Color("77")).Bold(true)
+	artist   := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	hint     := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	icon     := lipgloss.NewStyle().Foreground(lipgloss.Color("136"))
+
+	var b strings.Builder
+	b.WriteString(title.Render("  shelf player") + "\n")
+	b.WriteString(dim.Render("  your tapes") + "\n\n")
+
+	if len(m.tapes) == 0 {
+		b.WriteString(dim.Render("  no tapes found") + "\n")
+		b.WriteString(dim.Render("  add folders to ~/shelfPlayer/tapes/") + "\n")
+	}
+
+	for i, t := range m.tapes {
+		if i == m.cursor {
+			b.WriteString(fmt.Sprintf("  %s %s  %s\n",
+				icon.Render("▌"),
+				selected.Render(t.Name),
+				artist.Render(t.Artist),
+			))
+			b.WriteString(fmt.Sprintf("      %s\n", dim.Render(fmt.Sprintf("%d tracks", len(t.Tracks)))))
+		} else {
+			b.WriteString(fmt.Sprintf("    %s  %s\n",
+				dim.Render(t.Name),
+				artist.Render(t.Artist),
+			))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(hint.Render("  ↑↓ · navigate    enter · load tape    q · quit"))
+	return b.String()
+}
+
+// ── reel ──────────────────────────────────────────────────────────────────────
 
 func dirChar(angle float64) string {
 	deg := math.Mod(angle*180/math.Pi+360, 360)
-
 	switch {
 	case deg < 22.5 || deg >= 337.5:
 		return "|"
@@ -127,158 +229,184 @@ func dirChar(angle float64) string {
 }
 
 func makeReel(spin float64) []string {
-
 	cx := float64(reelW-1) / 2
 	cy := float64(reelH-1) / 2
-
 	rx := float64(reelW-1) / 2
 	ry := float64(reelH-1) / 2
 
 	rows := make([]string, reelH)
-
 	for y := 0; y < reelH; y++ {
 		var line strings.Builder
-
 		for x := 0; x < reelW; x++ {
-
 			nx := (float64(x) - cx) / rx
 			ny := (float64(y) - cy) / ry
-
 			dist := math.Hypot(nx, ny)
 			angle := math.Atan2(ny, nx)
 
 			var c string
-
 			switch {
-
 			case dist > 1.02:
 				c = " "
-
 			case dist > 0.85:
 				c = dirChar(angle + math.Pi/2)
-
 			case dist < 0.10:
 				c = "O"
-
 			default:
 				c = "."
-
 				for i := 0; i < nSpokes; i++ {
-
 					sa := spin + float64(i)*2*math.Pi/float64(nSpokes)
-
 					vx := math.Cos(sa)
 					vy := math.Sin(sa)
-
 					perp := math.Abs(nx*vy - ny*vx)
 					proj := nx*vx + ny*vy
-
 					if perp < 0.07 && proj > 0 {
 						c = dirChar(sa)
 						break
 					}
 				}
 			}
-
 			line.WriteString(c)
 		}
-
 		rows[y] = line.String()
 	}
-
 	return rows
 }
 
-func renderWalkman(m Model) string {
+func colorizeReel(rows []string) []string {
+	metal  := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	hub    := lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
+	fill   := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
-	left := makeReel(m.leftSpin)
-	right := makeReel(m.rightSpin)
-
-	inner := windowW + 8
-
-	sp := func(n int) string { return strings.Repeat(" ", n) }
-
-	shell := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	frame := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	metal := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	hub := lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
-	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-
-	colorize := func(rows []string) []string {
-		out := make([]string, len(rows))
-
-		for i, r := range rows {
-			var b strings.Builder
-
-			for _, ch := range r {
-				s := string(ch)
-
-				switch s {
-				case "O":
-					b.WriteString(hub.Render(s))
-				case "|", "/", "-", "\\":
-					b.WriteString(metal.Render(s))
-				case " ":
-					b.WriteString(" ")
-				default:
-					b.WriteString(frame.Render(s))
-				}
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		var b strings.Builder
+		for _, ch := range r {
+			s := string(ch)
+			switch s {
+			case "O":
+				b.WriteString(hub.Render(s))
+			case "|", "/", "-", "\\":
+				b.WriteString(metal.Render(s))
+			case " ":
+				b.WriteString(" ")
+			default:
+				b.WriteString(fill.Render(s))
 			}
-
-			out[i] = b.String()
 		}
+		out[i] = b.String()
+	}
+	return out
+}
 
-		return out
+// ── walkman ───────────────────────────────────────────────────────────────────
+
+// boxRow builds one line of the walkman box.
+// content must be exactly boxInner visible chars — no color codes.
+// Color is applied AFTER width is fixed, so escape codes never affect layout.
+func boxRow(content string, shellStyle, contentStyle lipgloss.Style) string {
+	// pad or trim content to exactly boxInner chars
+	vis := lipgloss.Width(content)
+	if vis < boxInner {
+		content = content + strings.Repeat(" ", boxInner-vis)
+	} else if vis > boxInner {
+		content = content[:boxInner]
+	}
+	return shellStyle.Render("|") + contentStyle.Render(content) + shellStyle.Render("|")
+}
+
+// centerInBox returns a string of exactly boxInner chars with text centered.
+func centerInBox(text string) string {
+	n := len(text)
+	if n >= boxInner {
+		return text[:boxInner]
+	}
+	left := (boxInner - n) / 2
+	right := boxInner - n - left
+	return strings.Repeat(" ", left) + text + strings.Repeat(" ", right)
+}
+
+func renderWalkman(m Model) string {
+	shell  := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	metal  := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	accent := lipgloss.NewStyle().Foreground(lipgloss.Color("77")).Bold(true)
+	dim    := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	hint   := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	none   := lipgloss.NewStyle()
+
+	reelRows := colorizeReel(makeReel(m.leftSpin))
+
+	tapeName  := ""
+	trackName := "no tape loaded"
+	trackNum  := ""
+	if m.currentTape != nil {
+		tapeName = m.currentTape.Name
+		if m.currentTrack < len(m.currentTape.Tracks) {
+			tr := m.currentTape.Tracks[m.currentTrack]
+			trackName = tr.Title
+			if tr.Artist != "" {
+				trackName = tr.Title + "  .  " + tr.Artist
+			}
+			trackNum = fmt.Sprintf("%02d / %02d", m.currentTrack+1, len(m.currentTape.Tracks))
+		}
 	}
 
-	left = colorize(left)
-	right = colorize(right)
+	// ALL strings used in width math must be pure ASCII
+	// ▶ ■ · are ambiguous-width Unicode — terminals may render them as 2 cells
+	// status: exactly 9 ASCII chars
+	statusColored := accent.Render(">") + dim.Render(" playing")
+	if !m.playing {
+		statusColored = dim.Render("= stopped")
+	}
+
+	// ctrl: exactly 16 ASCII chars "|<  [ ]  [>]  >|"
+	//ctrlPlain := "|<  [ ]  [>]  >|"
+	var ctrlColored string
+	if m.playing {
+		ctrlColored = shell.Render("|<") + "  " +
+			shell.Render("[ ]") + "  " +
+			accent.Render("[>]") + "  " +
+			shell.Render(">|")
+	} else {
+		ctrlColored = shell.Render("|<") + "  " +
+			accent.Render("[ ]") + "  " +
+			shell.Render("[>]") + "  " +
+			shell.Render(">|")
+	}
+
+	// ctrl row = "  " + status(9) + gap + ctrl(16) = 44
+	// gap = 44 - 2 - 9 - 16 = 17
+	const ctrlGap = boxInner - 2 - 9 - 16 // = 17
+	ctrlRowColored := "  " + statusColored + strings.Repeat(" ", ctrlGap) + ctrlColored
+
+	const reelPad = 4
+	const reelGap = boxInner - 2*reelW - 2*reelPad // = 6
 
 	var b strings.Builder
-	w := func(s string) { b.WriteString(s + "\n") }
+	ln := func(s string) { b.WriteString(s + "\n") }
 
-	// OUTER DEVICE BODY (Walkman frame)
-	w(shell.Render("+" + strings.Repeat("=", inner) + "+"))
+	ln(shell.Render("+" + strings.Repeat("=", boxInner) + "+"))
+	ln(boxRow(centerInBox(tapeName), shell, dim))
+	ln(boxRow("", shell, none))
 
-	title := "Terminal Walkman"
-	titlePad := (inner - len(title)) / 2
-
-	w(shell.Render("|") + sp(titlePad) + title + sp(titlePad) + shell.Render("|"))
-
-	// top padding / window frame
-	w(shell.Render("|") + sp(inner) + shell.Render("|"))
-
-	// CASSETTE WINDOW
 	for i := 0; i < reelH; i++ {
-
-		var row strings.Builder
-
-		row.WriteString(shell.Render("|"))
-		row.WriteString(sp(4))
-		row.WriteString(left[i])
-		row.WriteString(sp(6))
-		row.WriteString(right[i])
-		row.WriteString(sp(4))
-		row.WriteString(shell.Render("|"))
-
-		w(row.String())
+		ln(shell.Render("|") +
+			strings.Repeat(" ", reelPad) +
+			reelRows[i] +
+			strings.Repeat(" ", reelGap) +
+			reelRows[i] +
+			strings.Repeat(" ", reelPad) +
+			shell.Render("|"))
 	}
 
-	w(shell.Render("|") + sp(inner) + shell.Render("|"))
+	ln(boxRow("", shell, none))
+	ln(boxRow(centerInBox(trackName), shell, metal))
+	ln(boxRow(centerInBox(trackNum), shell, dim))
+	ln(boxRow("", shell, none))
+	ln(shell.Render("|") + ctrlRowColored + shell.Render("|"))
+	ln(boxRow("", shell, none))
+	ln(shell.Render("+" + strings.Repeat("=", boxInner) + "+"))
 
-	// controls (simple, device-like)
-	w(shell.Render("|") +
-		sp(4) +
-		metal.Render("[◄◄] [▶] [■]") +
-		sp(inner-12-4) +
-		shell.Render("|"))
-
-	w(shell.Render("|") + sp(inner) + shell.Render("|"))
-
-	w(shell.Render("+" + strings.Repeat("=", inner) + "+"))
-
-	w("")
-	w("  " + hint.Render("space · play/pause     q · quit"))
+	b.WriteString("\n  " + hint.Render("space . play/pause    n/p . tracks    esc . library    q . quit") + "\n")
 
 	return b.String()
 }
