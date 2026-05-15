@@ -27,13 +27,16 @@ func (t *Tape) TrackPath(track Track) string {
 }
 
 func RootDir() (string, error) {
-    root := "tapes"
-    if err := os.MkdirAll(root, 0755); err != nil {
-        return "", err
-    }
-    return root, nil
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Join(home, ".shelfplayer", "tapes")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		return "", err
+	}
+	return root, nil
 }
-
 // LoadAll scans the tapes directory and returns all valid tapes
 func LoadAll() ([]*Tape, error) {
 	root, err := RootDir()

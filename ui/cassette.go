@@ -59,6 +59,14 @@ const (
 	boxInner = 44
 )
 
+// detailMode is the mode selector on the tape detail screen
+type detailMode int
+
+const (
+	detailModePlay detailMode = iota
+	detailModeFocus
+)
+
 type Model struct {
 	screen       screen
 	width        int
@@ -76,16 +84,19 @@ type Model struct {
 	rightSpin    float64
 	playing      bool
 	loopTrack    bool
+	detailMode   detailMode
+	focusMins    int
 	creator      Creator
 	pomo         pomodoro.Pomodoro
 }
 
 func NewModel(player *audio.Player, tapes []*tape.Tape) Model {
 	return Model{
-		screen: screenLibrary,
-		player: player,
-		tapes:  tapes,
-		pomo:   pomodoro.New(),
+		screen:    screenLibrary,
+		player:    player,
+		tapes:     tapes,
+		pomo:      pomodoro.New(),
+		focusMins: 25,
 	}
 }
 
@@ -195,6 +206,7 @@ func (m Model) updateLibrary(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.tapes) > 0 {
 			m.selectedTape = m.tapes[m.cursor]
 			m.trackCursor = 0
+			m.detailMode = detailModePlay
 			m.screen = screenDetail
 		}
 	case "n":
@@ -210,6 +222,24 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "esc", "b":
 		m.screen = screenLibrary
+
+	case "tab":
+		// toggle between play and focus mode
+		if m.detailMode == detailModePlay {
+			m.detailMode = detailModeFocus
+		} else {
+			m.detailMode = detailModePlay
+		}
+
+	case "+", "=":
+		if m.detailMode == detailModeFocus && m.focusMins < 60 {
+			m.focusMins++
+		}
+	case "-":
+		if m.detailMode == detailModeFocus && m.focusMins > 1 {
+			m.focusMins--
+		}
+
 	case "enter", " ":
 		if m.selectedTape == nil || len(m.selectedTape.Tracks) == 0 {
 			break
@@ -218,9 +248,22 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentTrack = 0
 		m.playing = false
 		m.screen = screenPlayer
+
+		// set up pomodoro if focus mode
+		if m.detailMode == detailModeFocus {
+			m.pomo = pomodoro.New()
+			m.pomo.WorkMins = m.focusMins
+			m.pomo.SecondsLeft = m.focusMins * 60
+			m.pomo.Active = true
+		} else {
+			m.pomo = pomodoro.New()
+			m.pomo.Active = false
+		}
+
 		if err := m.player.Load(m.currentTape.TrackPath(m.currentTape.Tracks[0])); err == nil {
 			m.playing = true
 		}
+
 	case "up", "k":
 		if m.trackCursor > 0 {
 			m.trackCursor--
@@ -240,6 +283,7 @@ func (m Model) updatePlayer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "b":
 		m.player.Toggle()
 		m.playing = false
+		m.pomo.Active = false
 		m.screen = screenLibrary
 	case " ":
 		m.player.Toggle()
@@ -258,22 +302,6 @@ func (m Model) updatePlayer(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "l":
 		m.loopTrack = !m.loopTrack
-	case "t":
-		m.pomo.Toggle()
-	case "+", "=":
-		if m.pomo.WorkMins < 60 {
-			m.pomo.WorkMins++
-			if !m.pomo.Active {
-				m.pomo.SecondsLeft = m.pomo.WorkMins * 60
-			}
-		}
-	case "-":
-		if m.pomo.WorkMins > 1 {
-			m.pomo.WorkMins--
-			if !m.pomo.Active {
-				m.pomo.SecondsLeft = m.pomo.WorkMins * 60
-			}
-		}
 	}
 	return m, nil
 }
@@ -348,31 +376,35 @@ func (m Model) viewDetail() string {
 	title    := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true)
 	dim      := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	selected := lipgloss.NewStyle().Foreground(lipgloss.Color("77")).Bold(true)
+	active   := lipgloss.NewStyle().Foreground(lipgloss.Color("77")).Bold(true)
+	inactive := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	artist   := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	num      := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	hint     := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	amber    := lipgloss.NewStyle().Foreground(lipgloss.Color("136"))
 
 	var b strings.Builder
+	w := func(s string) { b.WriteString(s + "\n") }
 
-	b.WriteString(amber.Render("  ▌ ") + title.Render(t.Name) + "\n")
+	w(amber.Render("  ▌ ") + title.Render(t.Name))
 	if t.Artist != "" {
-		b.WriteString(dim.Render("    "+t.Artist) + "\n")
+		w(dim.Render("    " + t.Artist))
 	}
-	b.WriteString(dim.Render(fmt.Sprintf("    %d tracks", len(t.Tracks))) + "\n")
-	b.WriteString("\n")
-	b.WriteString(dim.Render("  ────────────────────────────────") + "\n\n")
+	w(dim.Render(fmt.Sprintf("    %d tracks", len(t.Tracks))))
+	w("")
+	w(dim.Render("  ────────────────────────────────"))
+	w("")
 
 	for i, tr := range t.Tracks {
 		numStr := fmt.Sprintf("%02d", i+1)
 		if i == m.trackCursor {
-			b.WriteString(fmt.Sprintf("  %s  %s  %s\n",
+			w(fmt.Sprintf("  %s  %s  %s",
 				num.Render(numStr),
 				selected.Render(tr.Title),
 				artist.Render(tr.Artist),
 			))
 		} else {
-			b.WriteString(fmt.Sprintf("  %s  %s  %s\n",
+			w(fmt.Sprintf("  %s  %s  %s",
 				num.Render(numStr),
 				dim.Render(tr.Title),
 				artist.Render(tr.Artist),
@@ -380,9 +412,32 @@ func (m Model) viewDetail() string {
 		}
 	}
 
-	b.WriteString("\n")
-	b.WriteString(dim.Render("  ────────────────────────────────") + "\n\n")
-	b.WriteString(hint.Render("  enter . play    esc . back    q . quit"))
+	w("")
+	w(dim.Render("  ────────────────────────────────"))
+	w("")
+
+	// mode selector
+	playLabel  := inactive.Render("[ just play ]")
+	focusLabel := inactive.Render("[ focus ]")
+	if m.detailMode == detailModePlay {
+		playLabel = active.Render("[ just play ]")
+	} else {
+		focusLabel = active.Render("[ focus ]")
+	}
+	w(fmt.Sprintf("  mode:  %s  %s", playLabel, focusLabel))
+
+	// focus duration adjuster
+	if m.detailMode == detailModeFocus {
+		w("")
+		w(fmt.Sprintf("  work session:  %s min",
+			active.Render(fmt.Sprintf("%d", m.focusMins)),
+		))
+		w(dim.Render("  +/- to adjust"))
+	}
+
+	w("")
+	w(hint.Render("  tab . switch mode    enter . play    esc . back    q . quit"))
+
 	return b.String()
 }
 
@@ -559,10 +614,9 @@ func renderWalkman(m Model) string {
 		statusColored = dim.Render("= stopped")
 	}
 
-	// loop indicator — 2 chars, safe ASCII width
 	loopIndicator := "  "
 	if m.loopTrack {
-		loopIndicator = dim.Render(" o") // "o" for loop, safe single width
+		loopIndicator = dim.Render(" o")
 	}
 
 	var ctrlColored string
@@ -578,8 +632,7 @@ func renderWalkman(m Model) string {
 			shell.Render(">|")
 	}
 
-	// ctrl row: "  status(9) + gap(15) + loopIndicator(2) + ctrl(16)" = 44
-	const ctrlGap = boxInner - 2 - 9 - 2 - 16 // = 15
+	const ctrlGap = boxInner - 2 - 9 - 2 - 16
 	ctrlRowColored := "  " + statusColored + strings.Repeat(" ", ctrlGap) + loopIndicator + ctrlColored
 
 	const reelPad = 4
@@ -610,7 +663,7 @@ func renderWalkman(m Model) string {
 	ln(boxRow("", shell, none))
 	ln(shell.Render("+" + strings.Repeat("=", boxInner) + "+"))
 
-	b.WriteString("\n  " + hint.Render("space . play/pause    n/p . tracks    l . loop    t . pomodoro    esc . library    q . quit") + "\n")
+	b.WriteString("\n  " + hint.Render("space . play/pause    n/p . tracks    l . loop    esc . shelf    q . quit") + "\n")
 
 	return b.String()
 }

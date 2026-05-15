@@ -12,8 +12,6 @@ import (
 	"github.com/rgarcia2304/shelfPlayer/tape"
 )
 
-// ── messages ──────────────────────────────────────────────────────────────────
-
 type searchResultMsg struct {
 	results []searchResult
 	err     error
@@ -27,10 +25,8 @@ type downloadDoneMsg struct {
 type searchResult struct {
 	title  string
 	artist string
-	query  string // what we'll pass to yt-dlp
+	query  string
 }
-
-// ── creator state ─────────────────────────────────────────────────────────────
 
 type creatorStep int
 
@@ -42,23 +38,20 @@ const (
 )
 
 type Creator struct {
-	step        creatorStep
-	tapeName    string
-	nameInput   string
-	searchInput string
-	results     []searchResult
+	step         creatorStep
+	tapeName     string
+	nameInput    string
+	searchInput  string
+	results      []searchResult
 	resultCursor int
-	tracks      []tape.Track
-	downloading string // name of track currently downloading
-	err         string
-	done        bool
+	tracks       []tape.Track
+	downloading  string
+	err          string
 }
 
 func NewCreator() Creator {
 	return Creator{step: stepName}
 }
-
-// ── creator update ────────────────────────────────────────────────────────────
 
 func (m Model) updateCreator(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	c := &m.creator
@@ -85,33 +78,33 @@ func (m Model) updateCreator(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case stepSearch:
-    		switch msg.String() {
-    		case "esc":
-        		c.step = stepName
-    		case "enter":
-        		if strings.TrimSpace(c.searchInput) != "" {
-            			return m, doSearch(c.searchInput)
-        		}
-    		case "backspace":
-        		if len(c.searchInput) > 0 {
-            			c.searchInput = c.searchInput[:len(c.searchInput)-1]
-        		}
-    		case "ctrl+s":  // ← use ctrl+s instead of s
-        		if len(c.tracks) > 0 {
-            		if err := saveTape(c.tapeName, c.tracks); err != nil {
-                		c.err = err.Error()
-            		} else {
-                		newTapes, _ := tape.LoadAll()
-                		m.tapes = newTapes
-                		m.screen = screenLibrary
-                		m.creator = NewCreator()
-            		}
-        	}
-    	default:
-        	if len(msg.String()) == 1 {
-            		c.searchInput += msg.String()
-        	}
-    	}
+		switch msg.String() {
+		case "esc":
+			c.step = stepName
+		case "ctrl+s":
+			if len(c.tracks) > 0 {
+				if err := saveTape(c.tapeName, c.tracks); err != nil {
+					c.err = err.Error()
+				} else {
+					newTapes, _ := tape.LoadAll()
+					m.tapes = newTapes
+					m.screen = screenLibrary
+					m.creator = NewCreator()
+				}
+			}
+		case "enter":
+			if strings.TrimSpace(c.searchInput) != "" {
+				return m, doSearch(c.searchInput)
+			}
+		case "backspace":
+			if len(c.searchInput) > 0 {
+				c.searchInput = c.searchInput[:len(c.searchInput)-1]
+			}
+		default:
+			if len(msg.String()) == 1 {
+				c.searchInput += msg.String()
+			}
+		}
 
 	case stepResults:
 		switch msg.String() {
@@ -134,13 +127,11 @@ func (m Model) updateCreator(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				trackNum := len(c.tracks) + 1
 				return m, doDownload(c.tapeName, r, trackNum)
 			}
-		case "s":
-			// save tape with current tracks and exit
+		case "ctrl+s":
 			if len(c.tracks) > 0 {
 				if err := saveTape(c.tapeName, c.tracks); err != nil {
 					c.err = err.Error()
 				} else {
-					// reload tapes and go back to library
 					newTapes, _ := tape.LoadAll()
 					m.tapes = newTapes
 					m.screen = screenLibrary
@@ -150,7 +141,6 @@ func (m Model) updateCreator(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case stepDownloading:
-		// no input during download — just wait
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
@@ -159,11 +149,8 @@ func (m Model) updateCreator(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// ── commands ──────────────────────────────────────────────────────────────────
-
 func doSearch(query string) tea.Cmd {
 	return func() tea.Msg {
-		// use yt-dlp to search and get top 5 results
 		args := []string{
 			"ytsearch5:" + query,
 			"--print", "%(title)s|||%(uploader)s|||%(webpage_url)s",
@@ -184,7 +171,7 @@ func doSearch(query string) tea.Cmd {
 				results = append(results, searchResult{
 					title:  parts[0],
 					artist: parts[1],
-					query:  parts[2], // URL for download
+					query:  parts[2],
 				})
 			}
 		}
@@ -194,8 +181,11 @@ func doSearch(query string) tea.Cmd {
 
 func doDownload(tapeName string, r searchResult, trackNum int) tea.Cmd {
 	return func() tea.Msg {
-		// create tape directory
-		tapeDir := filepath.Join("tapes", sanitize(tapeName))
+		root, err := tape.RootDir()
+		if err != nil {
+			return downloadDoneMsg{err: err}
+		}
+		tapeDir := filepath.Join(root, sanitize(tapeName))
 		if err := os.MkdirAll(tapeDir, 0755); err != nil {
 			return downloadDoneMsg{err: err}
 		}
@@ -225,9 +215,12 @@ func doDownload(tapeName string, r searchResult, trackNum int) tea.Cmd {
 		}
 	}
 }
-
 func saveTape(name string, tracks []tape.Track) error {
-	tapeDir := filepath.Join("tapes", sanitize(name))
+	root, err := tape.RootDir()
+	if err != nil {
+		return err
+	}
+	tapeDir := filepath.Join(root, sanitize(name))
 	if err := os.MkdirAll(tapeDir, 0755); err != nil {
 		return err
 	}
@@ -243,7 +236,6 @@ func saveTape(name string, tracks []tape.Track) error {
 func sanitize(s string) string {
 	s = strings.ToLower(s)
 	s = strings.ReplaceAll(s, " ", "-")
-	// remove non-alphanumeric except dashes
 	var out strings.Builder
 	for _, ch := range s {
 		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
@@ -252,8 +244,6 @@ func sanitize(s string) string {
 	}
 	return out.String()
 }
-
-// ── creator view ──────────────────────────────────────────────────────────────
 
 func (m Model) viewCreator() string {
 	c := m.creator
@@ -277,24 +267,15 @@ func (m Model) viewCreator() string {
 
 	case stepName:
 		w(dim.Render("  tape name"))
-		w(fmt.Sprintf("  %s%s",
-			input.Render(c.nameInput),
-			dim.Render("_"),
-		))
+		w(fmt.Sprintf("  %s%s", input.Render(c.nameInput), dim.Render("_")))
 		w("")
 		w(hint.Render("  enter . confirm    esc . back"))
 
 	case stepSearch:
 		w(title.Render("  " + c.tapeName))
 		w("")
-		w(dim.Render("  search for a track or album"))
-		w(fmt.Sprintf("  %s%s",
-			input.Render(c.searchInput),
-			dim.Render("_"),
-		))
-		w("")
 		if len(c.tracks) > 0 {
-			w(dim.Render(fmt.Sprintf("  %d tracks added so far", len(c.tracks))))
+			w(amber.Render("  added:"))
 			for i, t := range c.tracks {
 				w(fmt.Sprintf("  %s  %s",
 					num.Render(fmt.Sprintf("%02d", i+1)),
@@ -303,12 +284,15 @@ func (m Model) viewCreator() string {
 			}
 			w("")
 		}
-		w(hint.Render("  enter . search    s . save tape    esc . back"))
+		w(dim.Render("  search for a track"))
+		w(fmt.Sprintf("  > %s%s", input.Render(c.searchInput), dim.Render("_")))
+		w("")
+		w(hint.Render("  enter . search    ctrl+s . save tape    esc . back"))
 
 	case stepResults:
 		w(title.Render("  " + c.tapeName))
 		w("")
-		w(dim.Render("  results"))
+		w(dim.Render("  select a track"))
 		w("")
 		if len(c.results) == 0 {
 			w(dim.Render("  no results found"))
@@ -328,7 +312,7 @@ func (m Model) viewCreator() string {
 			}
 		}
 		w("")
-		w(hint.Render("  enter . add track    esc . search again    ctrl + s . save tape"))
+		w(hint.Render("  enter . add    ctrl+s . save tape    esc . search again"))
 
 	case stepDownloading:
 		w(title.Render("  " + c.tapeName))
