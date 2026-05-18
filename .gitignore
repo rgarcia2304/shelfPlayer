@@ -1,1 +1,9 @@
-/tapes
+# ignore local tapes
+tapes/
+
+# ignore built binary
+shelfplayer
+
+# ignore demo artifacts
+*.gif
+*.tape
