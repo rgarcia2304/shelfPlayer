@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
+	"regexp"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rgarcia2304/shelfPlayer/tape"
@@ -169,7 +169,7 @@ func doSearch(query string) tea.Cmd {
 			parts := strings.Split(line, "|||")
 			if len(parts) >= 3 {
 				results = append(results, searchResult{
-					title:  parts[0],
+					title:  cleanTitle(parts[0]),
 					artist: parts[1],
 					query:  parts[2],
 				})
@@ -208,7 +208,7 @@ func doDownload(tapeName string, r searchResult, trackNum int) tea.Cmd {
 
 		return downloadDoneMsg{
 			track: tape.Track{
-				Title:  r.title,
+				Title:  cleanTitle(r.title),
 				Artist: r.artist,
 				File:   filename,
 			},
@@ -329,4 +329,21 @@ func (m Model) viewCreator() string {
 	}
 
 	return b.String()
+}
+
+func cleanTitle(raw string) string {
+	// remove anything in parentheses or brackets
+	parenRe := regexp.MustCompile(`\s*[\(\[].*?[\)\]]`)
+	raw = parenRe.ReplaceAllString(raw, "")
+
+	// remove common separators and artist prefixes
+
+	separators := []string{" — ", " – ", " - "}
+	for _, sep := range separators {
+		if idx := strings.Index(raw, sep); idx != -1 {
+			raw = raw[idx+len(sep):]
+		}
+	}
+
+	return strings.TrimSpace(raw)
 }

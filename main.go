@@ -8,11 +8,18 @@ import (
 	"github.com/rgarcia2304/shelfPlayer/audio"
 	"github.com/rgarcia2304/shelfPlayer/tape"
 	"github.com/rgarcia2304/shelfPlayer/ui"
+	"os/exec"
 )
 
 func main() {
 	player := audio.NewPlayer()
 	defer player.Close()
+
+	if _, err := exec.LookPath("yt-dlp"); err != nil{
+		fmt.Fprintf(os.Stderr, "\n shelfplayer requires yt-dlp to create tapes\n")
+		fmt.Fprintf(os.Stderr, " install it with: brew install yt-dlp\n\n")
+		os.Exit(1)
+	}
 
 	tapes, err := tape.LoadAll()
 	if err != nil {
