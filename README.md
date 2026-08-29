@@ -8,10 +8,11 @@ No album art. No recommendations. No feed. Just music and spinning reels in the 
  
 ## what it is
  
-shelfPlayer is a TUI music player built around the cassette tape metaphor. You build tapes — curated playlists that live locally on your machine  and play them through a terminal walkman with spinning reels.
+shelfPlayer is a TUI music player built around the idea of going back into the cassette tape era. 
  
-The idea came from wanting music while coding without the distraction of Spotify or Apple Music. No infinite scroll, no suggested playlists, no ads. You pick what you want to hear before you sit down, load the tape, and get to work.
- 
+The idea came from wanting music while coding without the distraction of Spotify or Apple Music.
+
+
 It also has a built-in Pomodoro timer. Enable focus mode when loading a tape and the player automatically pauses on breaks and resumes when your work session starts.
  
 ## features
@@ -150,4 +151,4 @@ shelfPlayer uses yt-dlp to download audio from YouTube. Downloading from YouTube
  
 ---
  
-made for working.
+cheers
